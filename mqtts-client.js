@@ -1,7 +1,7 @@
 /***************************************************************
  * mqtt-client-debug.js
  * Script para conectarse a The Things Stack vía MQTT y enviar
- * datos a InfluxDB, con logs detallados para monitorear el proceso.
+ * datos a InfluxDB con nombres de campos y tags más representativos.
  ***************************************************************/
 
 const mqtt = require('mqtt');
@@ -26,7 +26,7 @@ console.log(`Topic de suscripción: ${TTN_TOPIC}`);
 // ---------------------------------------------------------
 const INFLUX_URL    = 'http://localhost:8086';
 const INFLUX_TOKEN  = '1znZf2FZ4syZ8HtEgDQKtm6p9T0_decSkMIX3HicbKTgy0GlU2TW0l3lcUDNoQ9fgDJYasyal2DEQ1yG3YFydg==';
-const INFLUX_ORG    = 'Smartfenix';
+const INFLUX_ORG    = 'smartfenix';
 const INFLUX_BUCKET = 'smartfenix';
 
 console.log('\n=== Configuración de InfluxDB ===');
@@ -81,29 +81,52 @@ client.on('message', (topic, message) => {
     const payload = JSON.parse(message.toString());
     console.log('Payload parseado:', JSON.stringify(payload, null, 2));
 
-    // Extraer datos básicos (ajusta según la estructura real de tu payload)
-    const deviceId = payload.end_device_ids?.device_id || 'desconocido';
+    // Extraer identificadores básicos
+    const deviceName = payload.end_device_ids?.device_id || 'desconocido';
+    const applicationName = payload.end_device_ids?.application_ids?.application_id || 'unknown';
     const receivedAt = payload.received_at || new Date().toISOString();
-    const decodedPayload = payload.uplink_message?.decoded_payload || {};
 
-    console.log(`Datos extraídos: deviceId=${deviceId}, receivedAt=${receivedAt}`);
-    console.log('Decoded Payload:', JSON.stringify(decodedPayload, null, 2));
+    // Frame count y puerto (si se quieren almacenar)
+    const frameCount = payload.uplink_message?.f_cnt || 0;
+    const portNumber = payload.uplink_message?.f_port || 0;
 
-    // Ejemplo: se asume que en el payload existen los campos "temp" y "hum"
-    const temperature = decodedPayload.temp || 0;
-    const humidity = decodedPayload.hum || 0;
-    console.log(`Mediciones: temperatura=${temperature}, humedad=${humidity}`);
+    // Acceder a la parte decodificada con las mediciones
+    const decoded = payload.uplink_message?.decoded_payload || {};
+    const messages = Array.isArray(decoded.messages) ? decoded.messages : [];
 
-    // Crear un punto para InfluxDB
-    const point = new Point('sensor_data')
-      .tag('device', deviceId)
-      .floatField('temperature', temperature)
-      .floatField('humidity', humidity)
-      .timestamp(new Date(receivedAt));
-    
-    console.log('Enviando punto a InfluxDB (line protocol):', point.toLineProtocol());
-    writeApi.writePoint(point);
-    console.log('Punto enviado a InfluxDB correctamente.');
+    console.log(`Datos extraídos: deviceName=${deviceName}, applicationName=${applicationName}, receivedAt=${receivedAt}`);
+    console.log('Decoded Payload:', JSON.stringify(decoded, null, 2));
+
+    if (messages.length === 0) {
+      console.log(`No se encontraron mediciones en decoded_payload.messages para el dispositivo: ${deviceName}`);
+      return;
+    }
+
+    // Iterar sobre cada medición y crear un punto para InfluxDB
+    messages.forEach((measurement, index) => {
+      // Extraer campos de la medición
+      const sensorId = measurement.measurementId?.toString() || '0';
+      const sensorValue = measurement.measurementValue || 0;
+      const sensorType = measurement.type || 'desconocido';
+
+      console.log(`Medición [${index}]: sensorId=${sensorId}, sensorType=${sensorType}, sensorValue=${sensorValue}`);
+
+      // Crear un punto con nombres de campo/tag más descriptivos
+      const point = new Point('sensor_measurement')
+        .tag('application_name', applicationName)
+        .tag('device_name', deviceName)
+        .tag('sensor_type', sensorType)
+        .stringField('sensor_id', sensorId)
+        .floatField('sensor_value', sensorValue)
+        .intField('frame_count', frameCount)
+        .intField('port_number', portNumber)
+        .timestamp(new Date(receivedAt));
+
+      console.log('Enviando punto a InfluxDB (line protocol):', point.toLineProtocol());
+      writeApi.writePoint(point);
+    });
+
+    console.log(`Se han enviado ${messages.length} medición(es) a InfluxDB para el dispositivo: ${deviceName}`);
   } catch (error) {
     console.error('Error al procesar el mensaje MQTT:', error);
   }
