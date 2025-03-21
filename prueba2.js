@@ -1,15 +1,15 @@
 /***************************************************************
  * simulate.js
- * Adaptado para el JSON de la "estacion-meteorologica". Procesa
- * todos los eventos, busca los de "as.up.data.forward" y extrae
- * las mediciones del payload, almacenándolas en InfluxDB.
+ * Procesa un archivo JSON (con un array de eventos de The Things Stack)
+ * y extrae las mediciones de los mensajes uplink, insertándolas en InfluxDB
+ * con nombres de tags y fields más representativos.
  ***************************************************************/
 
 const fs = require('fs');
 const { InfluxDB, Point } = require('@influxdata/influxdb-client');
 
 // ---------------------------------------------------------
-// 1. CONFIGURACIÓN INFLUXDB
+// 1. CONFIGURACIÓN DE INFLUXDB
 // ---------------------------------------------------------
 const INFLUX_URL    = 'http://localhost:8086'; 
 const INFLUX_TOKEN  = '1znZf2FZ4syZ8HtEgDQKtm6p9T0_decSkMIX3HicbKTgy0GlU2TW0l3lcUDNoQ9fgDJYasyal2DEQ1yG3YFydg==';
@@ -24,58 +24,56 @@ const writeApi = influxDB.getWriteApi(INFLUX_ORG, INFLUX_BUCKET);
 // 2. Función para procesar un mensaje individual
 // ---------------------------------------------------------
 function processMessage(message) {
-  // Solo nos interesan los eventos con "name" == "as.up.data.forward"
-  if (message.name !== 'as.up.data.forward') {
-    // Puedes descomentar para ver qué otros tipos de eventos aparecen:
-    // console.log(`Evento ignorado (name=${message.name})`);
-    return;
-  }
+  // Solo procesamos los eventos de uplink válidos
+  if (message.name !== 'as.up.data.forward') return;
 
   const data = message.data;
   if (!data || !data.uplink_message || !data.uplink_message.decoded_payload) {
-    console.log('Mensaje sin payload decodificado, se omite.');
+    console.log('Evento sin payload decodificado, se omite.');
     return;
   }
 
-  // Extraer el device_id y el application_id
-  const deviceId      = data.end_device_ids?.device_id || 'desconocido';
-  const applicationId = data.end_device_ids?.application_ids?.application_id || 'unknown';
+  // Extraer identificadores
+  const deviceName      = data.end_device_ids?.device_id || 'desconocido';
+  const applicationName = data.end_device_ids?.application_ids?.application_id || 'unknown';
 
-  // f_cnt y f_port (por si quieres guardarlos también en Influx)
-  const fCnt  = data.uplink_message.f_cnt  || 0;
-  const fPort = data.uplink_message.f_port || 0;
+  // Extraer información adicional (por ejemplo, contador de frames y puerto)
+  const frameCount  = data.uplink_message.f_cnt || 0;
+  const portNumber  = data.uplink_message.f_port || 0;
 
-  // Timestamp: priorizamos data.received_at; si no, usamos message.time
-  const receivedAt = data.received_at || message.time;
+  // Determinar el timestamp (priorizando data.received_at)
+  const eventTime = data.received_at || message.time;
 
-  // Acceder a la parte decodificada
+  // Acceder a las mediciones decodificadas
   const decoded = data.uplink_message.decoded_payload;
   if (!decoded.messages || !Array.isArray(decoded.messages)) {
-    console.log(`No se encontraron mediciones en el payload para ${deviceId}`);
+    console.log(`No se encontraron mediciones en el payload para el dispositivo ${deviceName}`);
     return;
   }
 
-  // Iterar sobre las mediciones que vienen en "decoded_payload.messages"
+  // Iterar sobre cada medición y escribir un punto en InfluxDB
   decoded.messages.forEach((measurement) => {
-    // measurementId, measurementValue y type
-    const measId    = measurement.measurementId?.toString() || '0';
-    const measValue = measurement.measurementValue || 0;
-    const measType  = measurement.type || 'desconocido';
+    // Extraer datos de la medición
+    const sensorId    = measurement.measurementId?.toString() || '0';
+    const sensorValue = measurement.measurementValue || 0;
+    const sensorType  = measurement.type || 'desconocido';
 
-    // Crear un punto para cada medición
-    const point = new Point('sensor_data')
-      .tag('application', applicationId)
-      .tag('device', deviceId)
-      .tag('type', measType)
-      .stringField('measurementId', measId)
-      .floatField('measurementValue', measValue)
-      // Guardar también fCnt y fPort (si lo deseas):
-      .intField('fCnt', fCnt)
-      .intField('fPort', fPort)
-      .timestamp(new Date(receivedAt));
+    // Crear un punto con nombres descriptivos:
+    // - Measurement: "sensor_measurement"
+    // - Tags: application_name, device_name, sensor_type
+    // - Fields: sensor_id, sensor_value, frame_count y port_number
+    const point = new Point('sensor_measurement')
+      .tag('application_name', applicationName)
+      .tag('device_name', deviceName)
+      .tag('sensor_type', sensorType)
+      .stringField('sensor_id', sensorId)
+      .floatField('sensor_value', sensorValue)
+      .intField('frame_count', frameCount)
+      .intField('port_number', portNumber)
+      .timestamp(new Date(eventTime));
 
     writeApi.writePoint(point);
-    console.log(`Escrito en InfluxDB -> device=${deviceId}, type=${measType}, value=${measValue}, fCnt=${fCnt}, fPort=${fPort}, time=${receivedAt}`);
+    console.log(`Escrito en InfluxDB -> device_name: ${deviceName}, sensor_type: ${sensorType}, sensor_value: ${sensorValue}, frame_count: ${frameCount}, port_number: ${portNumber}, time: ${eventTime}`);
   });
 }
 
@@ -95,18 +93,17 @@ fs.readFile(jsonFilePath, 'utf8', (err, fileData) => {
     process.exit(1);
   }
   try {
-    // El archivo es un array de objetos (eventos)
     const messages = JSON.parse(fileData);
     if (!Array.isArray(messages)) {
       console.error('El archivo JSON debe contener un array de eventos.');
       process.exit(1);
     }
-    // Procesar cada evento del array
+    // Procesar cada evento
     messages.forEach(msg => processMessage(msg));
 
     // Cerrar la conexión con InfluxDB
     writeApi.close()
-      .then(() => console.log('Conexión a InfluxDB cerrada.'))
+      .then(() => console.log('Conexión a InfluxDB cerrada correctamente.'))
       .catch(e => console.error('Error al cerrar la conexión a InfluxDB:', e));
   } catch (e) {
     console.error('Error al parsear el JSON:', e);
