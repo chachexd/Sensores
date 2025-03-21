@@ -1,24 +1,30 @@
 /***************************************************************
- * mqtt-client-debug.js
- * Script para conectarse a The Things Stack (Industries) vía MQTT
- * y enviar datos a InfluxDB con nombres de campos y tags representativos.
+ * mqtt-client-debug-ip.js
+ * Código alternativo para conectarse a The Things Stack (Industries)
+ * vía MQTT usando una dirección IP, y enviar datos a InfluxDB con
+ * nombres de campos y tags descriptivos.
+ * NOTA: Se desactiva la validación TLS (rejectUnauthorized: false)
+ * para descartar problemas de DNS/certificados. No usar en producción.
  ***************************************************************/
+
+// Forzar IPv4 primero (para evitar problemas intermitentes de DNS)
+require('dns').setDefaultResultOrder('ipv4first');
 
 const mqtt = require('mqtt');
 const { InfluxDB, Point } = require('@influxdata/influxdb-client');
 
 // ---------------------------------------------------------
-// 1. CONFIGURACIÓN DE THE THINGS STACK
+// 1. CONFIGURACIÓN DE THE THINGS STACK (Industries)
 // ---------------------------------------------------------
-// Para The Things Industries, la URL del broker suele ser:
-// "eu1.cloud.thethings.industries"
-const TTN_BROKER   = 'eu1.cloud.thethings.industries';
-const TTN_USERNAME = 'admin';  // Usualmente, tu Application ID
-const TTN_PASSWORD = 'NNSXS.M5VJ6N22PHAY32ELIJ26K5NULLEA4QBYEX62IDA.HUW3IU5V7WNWKKZQNRQUGXYVPY42CS5KWUDW2ENOC2LJNNYGBR2A';
-const TTN_TOPIC    = 'v3/prueba1@TTN/devices/+/up';
+// Usamos una dirección IP obtenida de nslookup: por ejemplo, "52.17.144.232"
+const TTN_BROKER_IP   = '52.17.144.232';
+const TTN_USERNAME    = 'prueba1'; // Este es el Application ID
+const TTN_PASSWORD    = 'NNSXS.M5VJ6N22PHAY32ELIJ26K5NULLEA4QBYEX62IDA.HUW3IU5V7WNWKKZQNRQUGXYVPY42CS5KWUDW2ENOC2LJNNYGBR2A';
+// El topic sigue siendo el mismo, pero se conecta vía IP:
+const TTN_TOPIC       = 'v3/prueba1@smartfenixiot/devices/+/up';
 
-console.log('=== Configuración de The Things Stack ===');
-console.log(`Broker: ${TTN_BROKER}`);
+console.log('=== Configuración de The Things Stack (usando IP) ===');
+console.log(`Broker IP: ${TTN_BROKER_IP}`);
 console.log(`Application ID (Usuario): ${TTN_USERNAME}`);
 console.log(`API Key (Password): ${TTN_PASSWORD}`);
 console.log(`Topic de suscripción: ${TTN_TOPIC}`);
@@ -43,12 +49,13 @@ const writeApi = influxDB.getWriteApi(INFLUX_ORG, INFLUX_BUCKET);
 console.log('Conexión a InfluxDB establecida.');
 
 // ---------------------------------------------------------
-// 3. Conexión a MQTT (The Things Stack Industries)
+// 3. Conexión a MQTT (The Things Stack Industries) vía TLS usando IP
 // ---------------------------------------------------------
-console.log('\nConectando a The Things Stack vía MQTT (TLS)...');
-const client = mqtt.connect(`mqtts://${TTN_BROKER}:8883`, {
+console.log('\nConectando a The Things Stack vía MQTT (TLS) usando IP...');
+const client = mqtt.connect(`mqtts://${TTN_BROKER_IP}:8883`, {
   username: TTN_USERNAME,
-  password: TTN_PASSWORD
+  password: TTN_PASSWORD,
+  rejectUnauthorized: false // Ignora la validación de certificados (solo para pruebas)
 });
 
 client.on('connect', () => {
@@ -106,17 +113,12 @@ client.on('message', (topic, message) => {
 
     // Iterar sobre cada medición y crear un punto para InfluxDB
     measurements.forEach((measurement, index) => {
-      // Extraer datos de la medición
       const sensorId = measurement.measurementId?.toString() || '0';
       const sensorValue = measurement.measurementValue || 0;
       const sensorType = measurement.type || 'desconocido';
 
       console.log(`Medición [${index}]: sensor_id=${sensorId}, sensor_type=${sensorType}, sensor_value=${sensorValue}`);
 
-      // Crear un punto con nombres descriptivos:
-      // Measurement: "sensor_measurement"
-      // Tags: application_name, device_name, sensor_type
-      // Fields: sensor_id, sensor_value, frame_count y port_number
       const point = new Point('sensor_measurement')
         .tag('application_name', applicationName)
         .tag('device_name', deviceName)
