@@ -1,17 +1,19 @@
 /***************************************************************
  * mqtt-client-debug.js
- * Script para conectarse a The Things Stack vía MQTT y enviar
- * datos a InfluxDB con nombres de campos y tags más representativos.
+ * Script para conectarse a The Things Stack (Industries) vía MQTT
+ * y enviar datos a InfluxDB con nombres de campos y tags representativos.
  ***************************************************************/
 
 const mqtt = require('mqtt');
 const { InfluxDB, Point } = require('@influxdata/influxdb-client');
 
 // ---------------------------------------------------------
-// 1. CONFIGURACIÓN THE THINGS STACK
+// 1. CONFIGURACIÓN DE THE THINGS STACK
 // ---------------------------------------------------------
-const TTN_BROKER   = 'eu1.cloud.thethings.network';
-const TTN_USERNAME = 'admin';
+// Para The Things Industries, la URL del broker suele ser:
+// "eu1.cloud.thethings.industries"
+const TTN_BROKER   = 'eu1.cloud.thethings.industries';
+const TTN_USERNAME = 'admin';  // Usualmente, tu Application ID
 const TTN_PASSWORD = 'NNSXS.M5VJ6N22PHAY32ELIJ26K5NULLEA4QBYEX62IDA.HUW3IU5V7WNWKKZQNRQUGXYVPY42CS5KWUDW2ENOC2LJNNYGBR2A';
 const TTN_TOPIC    = 'v3/prueba1@TTN/devices/+/up';
 
@@ -22,11 +24,11 @@ console.log(`API Key (Password): ${TTN_PASSWORD}`);
 console.log(`Topic de suscripción: ${TTN_TOPIC}`);
 
 // ---------------------------------------------------------
-// 2. CONFIGURACIÓN INFLUXDB
+// 2. CONFIGURACIÓN DE INFLUXDB
 // ---------------------------------------------------------
 const INFLUX_URL    = 'http://localhost:8086';
 const INFLUX_TOKEN  = '1znZf2FZ4syZ8HtEgDQKtm6p9T0_decSkMIX3HicbKTgy0GlU2TW0l3lcUDNoQ9fgDJYasyal2DEQ1yG3YFydg==';
-const INFLUX_ORG    = 'smartfenix';
+const INFLUX_ORG    = 'Smartfenix';
 const INFLUX_BUCKET = 'smartfenix';
 
 console.log('\n=== Configuración de InfluxDB ===');
@@ -41,10 +43,10 @@ const writeApi = influxDB.getWriteApi(INFLUX_ORG, INFLUX_BUCKET);
 console.log('Conexión a InfluxDB establecida.');
 
 // ---------------------------------------------------------
-// 3. Conexión a MQTT (The Things Stack)
+// 3. Conexión a MQTT (The Things Stack Industries)
 // ---------------------------------------------------------
-console.log('\nConectando a The Things Stack vía MQTT...');
-const client = mqtt.connect(`mqtt://${TTN_BROKER}:8883`, {
+console.log('\nConectando a The Things Stack vía MQTT (TLS)...');
+const client = mqtt.connect(`mqtts://${TTN_BROKER}:8883`, {
   username: TTN_USERNAME,
   password: TTN_PASSWORD
 });
@@ -86,32 +88,35 @@ client.on('message', (topic, message) => {
     const applicationName = payload.end_device_ids?.application_ids?.application_id || 'unknown';
     const receivedAt = payload.received_at || new Date().toISOString();
 
-    // Frame count y puerto (si se quieren almacenar)
+    // Extraer frame count y puerto (si se desean almacenar)
     const frameCount = payload.uplink_message?.f_cnt || 0;
     const portNumber = payload.uplink_message?.f_port || 0;
 
     // Acceder a la parte decodificada con las mediciones
     const decoded = payload.uplink_message?.decoded_payload || {};
-    const messages = Array.isArray(decoded.messages) ? decoded.messages : [];
+    const measurements = Array.isArray(decoded.messages) ? decoded.messages : [];
 
-    console.log(`Datos extraídos: deviceName=${deviceName}, applicationName=${applicationName}, receivedAt=${receivedAt}`);
+    console.log(`Datos extraídos: device_name=${deviceName}, application_name=${applicationName}, received_at=${receivedAt}`);
     console.log('Decoded Payload:', JSON.stringify(decoded, null, 2));
 
-    if (messages.length === 0) {
+    if (measurements.length === 0) {
       console.log(`No se encontraron mediciones en decoded_payload.messages para el dispositivo: ${deviceName}`);
       return;
     }
 
     // Iterar sobre cada medición y crear un punto para InfluxDB
-    messages.forEach((measurement, index) => {
-      // Extraer campos de la medición
+    measurements.forEach((measurement, index) => {
+      // Extraer datos de la medición
       const sensorId = measurement.measurementId?.toString() || '0';
       const sensorValue = measurement.measurementValue || 0;
       const sensorType = measurement.type || 'desconocido';
 
-      console.log(`Medición [${index}]: sensorId=${sensorId}, sensorType=${sensorType}, sensorValue=${sensorValue}`);
+      console.log(`Medición [${index}]: sensor_id=${sensorId}, sensor_type=${sensorType}, sensor_value=${sensorValue}`);
 
-      // Crear un punto con nombres de campo/tag más descriptivos
+      // Crear un punto con nombres descriptivos:
+      // Measurement: "sensor_measurement"
+      // Tags: application_name, device_name, sensor_type
+      // Fields: sensor_id, sensor_value, frame_count y port_number
       const point = new Point('sensor_measurement')
         .tag('application_name', applicationName)
         .tag('device_name', deviceName)
@@ -126,7 +131,7 @@ client.on('message', (topic, message) => {
       writeApi.writePoint(point);
     });
 
-    console.log(`Se han enviado ${messages.length} medición(es) a InfluxDB para el dispositivo: ${deviceName}`);
+    console.log(`Se han enviado ${measurements.length} medición(es) a InfluxDB para el dispositivo: ${deviceName}`);
   } catch (error) {
     console.error('Error al procesar el mensaje MQTT:', error);
   }
